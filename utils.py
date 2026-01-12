@@ -344,6 +344,43 @@ def evaluation(model, dataloader, device, _class_=None, calc_pro=True, norm_fact
     return auroc_px, auroc_sp, round(np.mean(aupro_list), 4)
 
 
+
+def evaluation_batch_good_check(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None):
+    model.eval()
+    pr_list_sp = []
+    pr_list_px = []
+    gaussian_kernel = get_gaussian_kernel(kernel_size=5, sigma=4).to(device)
+    with torch.no_grad():
+        for img, label in dataloader:
+            img = img.to(device)
+            output = model(img)
+
+            en, de = output[0], output[1]
+            anomaly_map, _ = cal_anomaly_maps(en, de, img.shape[-1])
+            if resize_mask is not None:
+                anomaly_map = F.interpolate(anomaly_map, size=resize_mask, mode='bilinear', align_corners=False)
+            anomaly_map = gaussian_kernel(anomaly_map)
+
+            pr_list_px.append(anomaly_map)
+
+            if max_ratio == 0:
+                sp_score = torch.max(anomaly_map.flatten(1), dim=1)[0]
+            else:
+                anomaly_map_flat = anomaly_map.flatten(1)
+                topk = int(anomaly_map_flat.shape[1] * max_ratio)
+                sp_score = torch.sort(anomaly_map_flat, dim=1, descending=True)[0][:, :topk].mean(dim=1)
+            pr_list_sp.append(sp_score)
+    pr_list_sp = torch.cat(pr_list_sp).flatten().cpu().numpy()
+    pr_list_px = torch.cat(pr_list_px).flatten().cpu().numpy()
+    stats = {
+        "sp_mean": np.mean(pr_list_sp),
+        "sp_std": np.std(pr_list_sp),
+        "px_mean": np.mean(pr_list_px),
+        "px_std": np.std(pr_list_px)
+    }
+    return pr_list_sp, pr_list_px, stats
+
+
 def evaluation_batch(model, dataloader, device, _class_=None, max_ratio=0, resize_mask=None):
     model.eval()
     gt_list_px = []
